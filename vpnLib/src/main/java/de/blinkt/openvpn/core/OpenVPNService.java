@@ -68,6 +68,9 @@ import de.blinkt.openvpn.api.ExternalAppDatabase;
 import de.blinkt.openvpn.core.VpnStatus.ByteCountListener;
 import de.blinkt.openvpn.core.VpnStatus.StateListener;
 import de.blinkt.openvpn.utils.TotalTraffic;
+import de.blinkt.openvpn.core.DeviceLockStateMonitor;
+import de.blinkt.openvpn.core.LockEventsManager;
+import de.blinkt.openvpn.core.LockNotificationHelper;
 
 import static de.blinkt.openvpn.core.ConnectionStatus.LEVEL_CONNECTED;
 import static de.blinkt.openvpn.core.ConnectionStatus.LEVEL_WAITING_FOR_USER_INPUT;
@@ -112,6 +115,10 @@ public class OpenVPNService extends VpnService implements StateListener, Callbac
     private int mMtu;
     private String mLocalIPv6 = null;
     private DeviceStateReceiver mDeviceStateReceiver;
+    private DeviceLockStateMonitor mLockStateMonitor;
+    private LockEventsManager mLockEventsManager;
+    private LockNotificationHelper mLockNotificationHelper;
+    private boolean isLockMonitoringActive = false;
     private boolean mDisplayBytecount = false;
     private boolean mStarting = false;
     private long mConnecttime;
@@ -274,6 +281,7 @@ public class OpenVPNService extends VpnService implements StateListener, Callbac
         }
         VpnStatus.removeByteCountListener(this);
         unregisterDeviceStateReceiver();
+        stopLockStateMonitoring();
         ProfileManager.setConntectedVpnProfileDisconnected(this);
         mOpenVPNThread = null;
         flag = false; // Ensure flag is set to false when service ends
@@ -1263,11 +1271,13 @@ public class OpenVPNService extends VpnService implements StateListener, Callbac
                 mDisplayBytecount = true;
                 mConnecttime = System.currentTimeMillis();
                 flag = true; // Set flag to true when connected
+                startLockStateMonitoring();
                 if (!runningOnAndroidTV())
                     channel = NOTIFICATION_CHANNEL_BG_ID;
             } else {
                 mDisplayBytecount = false;
                 flag = false; // Set flag to false when not connected
+                stopLockStateMonitoring();
             }
 
             // Other notifications are shown,
@@ -1504,5 +1514,97 @@ public class OpenVPNService extends VpnService implements StateListener, Callbac
 
     public boolean isConnected() {
         return flag;
+    }
+    
+    // ========== LOCK STATE MONITORING METHODS ==========
+    
+    /**
+     * Initialize lock state monitoring (called once when service starts)
+     */
+    private void initializeLockStateMonitoring() {
+        if (mLockEventsManager == null) {
+            mLockEventsManager = new LockEventsManager(this);
+        }
+        if (mLockNotificationHelper == null) {
+            mLockNotificationHelper = new LockNotificationHelper(this);
+        }
+        if (mLockStateMonitor == null) {
+            mLockStateMonitor = new DeviceLockStateMonitor(this, new DeviceLockStateMonitor.OnLockStateChangeListener() {
+                @Override
+                public void onLockStateChanged(boolean isLocked) {
+                    handleLockStateChange(isLocked);
+                }
+            });
+        }
+    }
+    
+    /**
+     * Start monitoring device lock state (only when VPN is connected)
+     */
+    private void startLockStateMonitoring() {
+        if (isLockMonitoringActive) {
+            return;
+        }
+        
+        // Verify VPN is actually connected
+        if (!flag) {
+            return;
+        }
+        
+        // Initialize if not already done
+        initializeLockStateMonitoring();
+        
+        if (mLockStateMonitor != null) {
+            boolean initialLockState = mLockStateMonitor.startMonitoring();
+            isLockMonitoringActive = true;
+            
+            // Record initial lock state if device is already locked
+            if (initialLockState && mLockEventsManager != null) {
+                mLockEventsManager.recordLockEvent(true);
+            }
+            
+            Log.i("OpenVPNService", "Started lock state monitoring. Initial state: " + 
+                  (initialLockState ? "LOCKED" : "UNLOCKED"));
+        }
+    }
+    
+    /**
+     * Stop monitoring device lock state
+     */
+    private void stopLockStateMonitoring() {
+        if (!isLockMonitoringActive) {
+            return;
+        }
+        
+        if (mLockStateMonitor != null) {
+            mLockStateMonitor.stopMonitoring();
+            isLockMonitoringActive = false;
+            Log.i("OpenVPNService", "Stopped lock state monitoring");
+        }
+    }
+    
+    /**
+     * Handle lock state change - record event and show notification if needed
+     */
+    private void handleLockStateChange(boolean isLocked) {
+        // Only record if VPN is connected
+        if (!flag) {
+            return;
+        }
+        
+        // Record the event and check if notification should be shown
+        boolean shouldShowNotification = false;
+        if (mLockEventsManager != null) {
+            shouldShowNotification = mLockEventsManager.recordLockEvent(isLocked);
+        }
+        
+        // Handle unlock notification
+        if (!isLocked && shouldShowNotification) {
+            // Device unlocked after being locked for >= 5 seconds
+            // Show notification after 2 second delay
+            if (mLockNotificationHelper != null) {
+                mLockNotificationHelper.showUnlockNotificationDelayed();
+            }
+        }
     }
 }

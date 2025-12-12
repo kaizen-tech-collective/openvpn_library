@@ -18,10 +18,6 @@ import org.json.JSONObject;
 
 import java.util.List;
 
-import de.blinkt.openvpn.core.DeviceLockStateMonitor;
-import de.blinkt.openvpn.core.LockEvent;
-import de.blinkt.openvpn.core.LockEventsManager;
-import de.blinkt.openvpn.core.LockNotificationHelper;
 import de.blinkt.openvpn.core.OpenVPNService;
 import de.blinkt.openvpn.core.OpenVPNThread;
 import de.blinkt.openvpn.core.VpnStatus;
@@ -41,12 +37,6 @@ public class VPNHelper extends Activity {
 
     public JSONObject status = new JSONObject();
     private VpnScheduler vpnScheduler;
-    
-    // Lock state monitoring
-    private DeviceLockStateMonitor lockStateMonitor;
-    private LockEventsManager lockEventsManager;
-    private LockNotificationHelper lockNotificationHelper;
-    private boolean isLockMonitoringActive = false;
 
     public boolean isConnected(){
         return vpnStart;
@@ -88,16 +78,6 @@ public class VPNHelper extends Activity {
         VPNHelper.vpnStart = false;
         VpnStatus.initLogCache(activity.getCacheDir());
         this.vpnScheduler = new VpnScheduler(activity);
-        
-        // Initialize lock state monitoring
-        this.lockEventsManager = new LockEventsManager(activity);
-        this.lockNotificationHelper = new LockNotificationHelper(activity);
-        this.lockStateMonitor = new DeviceLockStateMonitor(activity, new DeviceLockStateMonitor.OnLockStateChangeListener() {
-            @Override
-            public void onLockStateChanged(boolean isLocked) {
-                handleLockStateChange(isLocked);
-            }
-        });
     }
 
     public void setOnVPNStatusChangeListener(OnVPNStatusChangeListener listener) {
@@ -324,9 +304,6 @@ public class VPNHelper extends Activity {
             // Continue with cleanup even if VPN stop fails
         }
         
-        // Stop lock state monitoring
-        stopLockStateMonitoring();
-        
         // Set manual-disconnect suppression flag and notify app (same as scheduled disconnect)
         try {
             android.content.SharedPreferences flagPrefs = activity.getSharedPreferences("vpn_scheduler_flags", android.content.Context.MODE_PRIVATE);
@@ -378,13 +355,11 @@ public class VPNHelper extends Activity {
             case "CONNECTED":
                 output = "connected";
                 vpnStart = true;
-                startLockStateMonitoring();
                 break;
             case "DISCONNECTED":
                 output = "disconnected";
                 vpnStart = false;
                 OpenVPNService.setDefaultStatus();
-                stopLockStateMonitoring();
                 break;
             case "WAIT":
                 output = "wait_connection";
@@ -476,99 +451,5 @@ public class VPNHelper extends Activity {
                 VPNHelper.listener.onVPNStatusChanged("denied");
             }
         }
-    }
-    
-    // ========== LOCK STATE MONITORING METHODS ==========
-    
-    /**
-     * Start monitoring device lock state (only when VPN is connected)
-     */
-    private void startLockStateMonitoring() {
-        if (isLockMonitoringActive) {
-            Log.w("VPNHelper", "Lock monitoring already active");
-            return;
-        }
-        
-        // Verify VPN is actually connected
-        if (!vpnStart) {
-            Log.w("VPNHelper", "VPN not connected, skipping lock monitoring");
-            return;
-        }
-        
-        if (lockStateMonitor != null) {
-            boolean initialLockState = lockStateMonitor.startMonitoring();
-            isLockMonitoringActive = true;
-            
-            // Record initial lock state if device is already locked
-            if (initialLockState && lockEventsManager != null) {
-                lockEventsManager.recordLockEvent(true);
-            }
-            
-            Log.i("VPNHelper", "Started lock state monitoring. Initial state: " + 
-                  (initialLockState ? "LOCKED" : "UNLOCKED"));
-        }
-    }
-    
-    /**
-     * Stop monitoring device lock state
-     */
-    private void stopLockStateMonitoring() {
-        if (!isLockMonitoringActive) {
-            return;
-        }
-        
-        if (lockStateMonitor != null) {
-            lockStateMonitor.stopMonitoring();
-            isLockMonitoringActive = false;
-            Log.i("VPNHelper", "Stopped lock state monitoring");
-        }
-    }
-    
-    /**
-     * Handle lock state change - record event and show notification if needed
-     */
-    private void handleLockStateChange(boolean isLocked) {
-        // Only record if VPN is connected
-        if (!vpnStart) {
-            Log.w("VPNHelper", "VPN not connected, ignoring lock state change");
-            return;
-        }
-        
-        // Record the event and check if notification should be shown
-        boolean shouldShowNotification = false;
-        if (lockEventsManager != null) {
-            shouldShowNotification = lockEventsManager.recordLockEvent(isLocked);
-        }
-        
-        // Handle unlock notification
-        if (!isLocked && shouldShowNotification) {
-            // Device unlocked after being locked for >= 5 seconds
-            // Show notification after 2 second delay
-            if (lockNotificationHelper != null) {
-                lockNotificationHelper.showUnlockNotificationDelayed();
-            }
-        }
-    }
-    
-    /**
-     * Get today's lock events
-     * @return List of LockEvent objects for today
-     */
-    public List<LockEvent> getTodayLockEvents() {
-        if (lockEventsManager == null) {
-            return new java.util.ArrayList<>();
-        }
-        return lockEventsManager.getTodayLockEvents();
-    }
-    
-    /**
-     * Get current lock state
-     * @return LockState object with current state and timestamp, or null if not available
-     */
-    public LockEventsManager.LockState getCurrentLockState() {
-        if (lockEventsManager == null) {
-            return null;
-        }
-        return lockEventsManager.getCurrentLockState();
     }
 }

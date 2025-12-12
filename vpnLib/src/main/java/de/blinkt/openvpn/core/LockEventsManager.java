@@ -144,18 +144,13 @@ public class LockEventsManager {
     }
     
     /**
-     * Get current lock state
-     * @return LockState object with current state and timestamp, or null if not available
+     * Static utility method to get today's lock events from any context
+     * @param context Application context
+     * @return List of LockEvent objects for today
      */
-    public LockState getCurrentLockState() {
-        boolean isLocked = prefs.getBoolean(KEY_CURRENT_LOCK_STATE, false);
-        long timestamp = prefs.getLong(KEY_LOCK_STATE_TIMESTAMP, 0);
-        
-        if (timestamp == 0) {
-            return null; // No state recorded yet
-        }
-        
-        return new LockState(isLocked, timestamp);
+    public static List<LockEvent> getTodayLockEvents(Context context) {
+        LockEventsManager manager = new LockEventsManager(context);
+        return manager.getTodayLockEvents();
     }
     
     /**
@@ -208,27 +203,6 @@ public class LockEventsManager {
             Log.d(TAG, "Saved " + events.size() + " events to file");
         } catch (IOException e) {
             Log.e(TAG, "Error saving events: " + e.getMessage(), e);
-        }
-    }
-    
-    /**
-     * Represents current lock state
-     */
-    public static class LockState {
-        private final boolean isLocked;
-        private final long timestamp;
-        
-        public LockState(boolean isLocked, long timestamp) {
-            this.isLocked = isLocked;
-            this.timestamp = timestamp;
-        }
-        
-        public boolean isLocked() {
-            return isLocked;
-        }
-        
-        public long getTimestamp() {
-            return timestamp;
         }
     }
 }
