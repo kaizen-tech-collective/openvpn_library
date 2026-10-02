@@ -90,14 +90,40 @@ public class VpnSchedulerService extends Service {
         }
         
         // Keep service running
-        if (android.os.Build.VERSION.SDK_INT >= 34) { // Android 14 (API 34)
-            startForeground(getNotificationIdFromPrefs(), createNotification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-        } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            startForeground(getNotificationIdFromPrefs(), createNotification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-        } else {
-            startForeground(getNotificationIdFromPrefs(), createNotification());
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 34) { // Android 14 (API 34)
+                startForeground(getNotificationIdFromPrefs(), createNotification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+            } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                startForeground(getNotificationIdFromPrefs(), createNotification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+            } else {
+                startForeground(getNotificationIdFromPrefs(), createNotification());
+            }
+        } catch (Exception e) {
+            // Android 15+ refuses a dataSync foreground start once the daily
+            // dataSync budget is used up (ForegroundServiceStartNotAllowedException),
+            // until the app is next in the foreground. The action above has already
+            // run and the alarms live in AlarmManager, so stop instead of crashing.
+            Log.w(TAG, "Foreground start refused, stopping scheduler service: " + e.getMessage());
+            stopSelf(startId);
+            return START_NOT_STICKY;
         }
         return START_STICKY;
+    }
+
+    /**
+     * Android 15+ (API 35) calls this when the dataSync foreground service has
+     * used its daily time budget. The service must stop within a few seconds or
+     * the system crashes the app (ForegroundServiceDidNotStopInTimeException).
+     * Scheduled connect/disconnect alarms stay registered in AlarmManager and
+     * restart this service when they fire.
+     *
+     * No @Override: the library compiles against SDK 33, where this callback
+     * does not exist yet. The matching signature still overrides it at runtime.
+     */
+    public void onTimeout(int startId, int fgsType) {
+        Log.w(TAG, "Foreground service timeout (type " + fgsType + "), stopping scheduler service");
+        stopForeground(true);
+        stopSelf();
     }
     
     @Nullable
